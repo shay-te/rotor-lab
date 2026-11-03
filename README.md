@@ -2,7 +2,7 @@
 
 An interactive 3D test stand for finding the rotor blade that lifts the most per watt.
 
-Open `index.html` in a browser, or visit the GitHub Pages site for this repository.
+**Live site: https://shay-te.github.io/rotor-lab/**
 
 ## What it does
 
@@ -55,6 +55,61 @@ Use it to rank shapes, then confirm the winners on a real rig.
 
 The plan is a 3D-printed test stand where the same AI planner chooses each blade. It would generate an STL file for printing, then read a load cell (lift) and a current and voltage sensor (power), and decide what to print next.
 
-## Tech
+## Run locally
 
-A single HTML file with no build step. Three.js r147 is loaded from jsDelivr.
+The page is plain static files with no build step, but it uses ES modules, so it has to be served over HTTP (opening `index.html` straight from disk will not load the scripts). From the repo root:
+
+```sh
+python3 -m http.server 8000   # then open http://localhost:8000/
+npx serve .                   # or this, then open http://localhost:3000/
+```
+
+## Project structure
+
+```
+index.html              page markup; loads css/style.css and js/main.js
+css/style.css           all styles (design tokens in :root at the top)
+js/main.js              entry point: AI search runs, frame loop, event wiring, start-up
+js/state.js             the shared mutable state object S
+js/physics.js           rotor models and scoring: DEFS, BASELINE, airfoil, evalProp,
+                        evalCyclo, bladeMass, solve (pure: no DOM, no THREE)
+js/planner.js           Gaussian-process Bayesian optimizer (GP, Planner, explain)
+js/scene.js             Three.js scene: lab, rig, telescopic mast, rotor meshes, downwash
+js/ui.js                sliders, presets, telemetry, blade outline, side-force dial,
+                        results chart, planner log
+js/optimal.js           OPT: stored optimum designs (generated, see below)
+tools/optimize.mjs      offline optimizer that regenerates js/optimal.js
+.github/workflows/      GitHub Pages deployment
+```
+
+The imports have no cycles. `physics.js` depends on nothing, `planner.js` and `state.js` build on it, `scene.js` adds the state, `ui.js` adds the scene, and `main.js` ties them all together.
+
+Three.js r147 comes from jsDelivr through the import map in `index.html` (`three` and `three/addons/`).
+
+## Recompute the optimum
+
+`js/optimal.js` is written by an offline optimizer that imports the same `js/physics.js` as the page (Node 20 or newer, no dependencies):
+
+```sh
+npm run optimize
+```
+
+For each power budget it runs a multi-start coordinate pattern search for every propeller blade count (1–5) and every cyclorotor blade count (2–6), with per-blade pitch and tilt at 0. It then polishes the best propeller with every setting free, per-blade pitch and tilt included, using random kicks and re-climbs. It prints a summary table comparing the new designs with the stored ones, then rewrites `js/optimal.js`. A full run (about 125,000 simulated tests) takes around two minutes on a 10-core laptop, spread across all cores, and lands within 0.1% of the stored designs.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--budgets 15,30,45` | 15,30,45 | Power budgets in watts. The page reads b15, b30 and b45; budgets you leave out keep their stored entries. |
+| `--starts 6` | 6 | Random starts per rotor type, blade count and budget. |
+| `--seed 1` | 1 | Random seed. The same seed gives the same result. |
+| `--workers N` | all cores | Worker threads. |
+| `--out FILE` | `js/optimal.js` | Where to write the table. Point it elsewhere for a trial run. |
+
+Example of a quick trial run that leaves the stored table alone:
+
+```sh
+npm run optimize -- --budgets 30 --starts 1 --out /tmp/optimal.js
+```
+
+## Deployment
+
+Every push to `master` deploys the repo root to GitHub Pages through `.github/workflows/pages.yml`. In the repository settings, **Settings → Pages → Build and deployment → Source** must be set to **GitHub Actions**.

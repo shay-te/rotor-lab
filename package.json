@@ -8,6 +8,6 @@
     "optimize": "node tools/optimize.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   }
 }
