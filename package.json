@@ -1,0 +1,13 @@
+{
+  "name": "rotor-lab",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Interactive 3D rotor test stand: an AI planner searches blade shapes for the most lift per watt.",
+  "type": "module",
+  "scripts": {
+    "optimize": "node tools/optimize.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
