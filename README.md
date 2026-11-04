@@ -21,13 +21,13 @@ You can change:
 
 **Start AI search** runs a Bayesian optimizer (a Gaussian-process model with expected improvement). It picks each test, learns from the result, and writes down why it chose the next shape. It is built to find a good design in about 80 tests with ±3% sensor noise, which is how it would work on a real rig where every test means printing a blade.
 
-**Optimal** loads the best design found by an exhaustive offline search (more than a million simulated tests, multi-start pattern search, every blade count, at 15, 30 and 45 W).
+**Optimal** loads the best design found by an offline search (about 340,000 simulated tests: multi-start CMA-ES over every setting, for every blade count, at 15, 30 and 45 W).
 
 ## Optimal design (simulated, 30 W)
 
 | Setting | Value |
 |---|---|
-| Blades | 4 (3–5 are within 0.4%) |
+| Blades | 4 (5 ties, 3 is within 0.2%) |
 | Blade length | 40 cm (limit) |
 | Width | 12 mm at the hub, then 20 mm to the tip |
 | Pitch | 10.5° at 75% radius |
@@ -39,6 +39,7 @@ You can change:
 Findings that held across every search:
 
 - Blade length matters most. Bigger rotors spin slower and move more air, which is more efficient.
+- More power favours more blades: 3 is best at 15 W, 4 and 5 tie at 30 W, and 5 is best at 45 W. Each time the runner-up is within 0.1%.
 - Equal, flat blades always win. Unequal pitch or tilt costs efficiency and shakes the rig.
 - Outline matters little once twist is right. Smooth shapes beat jagged ones.
 - The best cyclorotor reaches about a third of the propeller's lift per watt.
@@ -94,12 +95,14 @@ Three.js r147 comes from jsDelivr through the import map in `index.html` (`three
 npm run optimize
 ```
 
-For each power budget it runs a multi-start coordinate pattern search for every propeller blade count (1–5) and every cyclorotor blade count (2–6), with per-blade pitch and tilt at 0. It then polishes the best propeller with every setting free, per-blade pitch and tilt included, using random kicks and re-climbs. It prints a summary table comparing the new designs with the stored ones, then rewrites `js/optimal.js`. A full run (about 125,000 simulated tests) takes around two minutes on a 10-core laptop, spread across all cores, and lands within 0.1% of the stored designs.
+For each power budget it runs a multi-start CMA-ES search for every propeller blade count (1–5) and every cyclorotor blade count (2–6). Per-blade pitch and tilt stay at 0; every other setting is free, all 8 outline points included. CMA-ES learns which settings pay off when moved together, such as neighbouring outline points, or pitch with twist, and searches along those directions. A search that moves one setting at a time misses those gains. It then polishes the best propeller with every setting free, per-blade pitch and tilt included.
+
+A budget keeps its stored design unless the new one beats it by more than 0.01%, so the table only improves and does not flip between equally good designs (3, 4 and 5 blades often tie). The tool prints a summary table comparing the new designs with the stored ones, then rewrites `js/optimal.js`. A full run (about 340,000 simulated tests) takes 10 to 15 minutes on a 10-core laptop, spread across all cores.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--budgets 15,30,45` | 15,30,45 | Power budgets in watts. The page reads b15, b30 and b45; budgets you leave out keep their stored entries. |
-| `--starts 6` | 6 | Random starts per rotor type, blade count and budget. |
+| `--starts 2` | 2 | CMA-ES runs per rotor type, blade count and budget. Each one starts from a new random point, with twice the previous run's population. |
 | `--seed 1` | 1 | Random seed. The same seed gives the same result. |
 | `--workers N` | all cores | Worker threads. |
 | `--out FILE` | `js/optimal.js` | Where to write the table. Point it elsewhere for a trial run. |
