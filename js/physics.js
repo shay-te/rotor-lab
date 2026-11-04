@@ -111,8 +111,9 @@ export function evalProp(g,rpm){
 
 export function evalCyclo(g,rpm){
   const n=g.n,Rc=g.Rc,b=g.span,c=g.chord,W=rpm*Math.PI/30,A=b*2*Rc,Ut=W*Rc,amp=g.amp*D2R,ph=g.phase*D2R,K=36;
-  let v=0.5,Fx=0,Fy=0,Pw=0,dx=0,dy=1;
+  let v=0.5,Fx=0,Fy=0,Pw=0,dx=0,dy=1,drift=0;
   for(let it=0;it<24;it++){
+    const Fx0=Fx,Fy0=Fy;
     Fx=0;Fy=0;Pw=0;
     for(let j=0;j<K;j++){
       const ps=2*Math.PI*j/K,tx=Math.cos(ps),ty=-Math.sin(ps),nx=Math.sin(ps),ny=Math.cos(ps);
@@ -129,10 +130,12 @@ export function evalCyclo(g,rpm){
     Fx*=n/K;Fy*=n/K;Pw*=n/K;
     const Fm=Math.hypot(Fx,Fy)||1e-6;dx=0.5*dx+0.5*Fx/Fm;dy=0.5*dy+0.5*Fy/Fm;const dm=Math.hypot(dx,dy)||1;dx/=dm;dy/=dm;
     v=0.5*v+0.5*Math.sqrt(Fm/(2*RHO*A));
+    if(it>=20)drift=Math.max(drift,Math.hypot(Fx-Fx0,Fy-Fy0)/Fm); // how much the force still moves in the last 4 repeats
   }
   // physical floor: never better than ideal momentum theory plus minimum blade drag (blocks numerical "free lunch" solutions)
   const Fm=Math.hypot(Fx,Fy),Pfloor=Math.pow(Fm,1.5)/Math.sqrt(2*RHO*A)/0.8+n*0.5*RHO*c*b*Ut*Ut*Ut*0.012;
-  return {T:Fy,side:Fx,P:Math.max(Pw,Pfloor),vi:v,tip:Ut,rpm};
+  // settled: false when the repeats never converge (the force keeps swinging), so these numbers are not a real answer
+  return {T:Fy,side:Fx,P:Math.max(Pw,Pfloor),vi:v,tip:Ut,rpm,settled:drift<1e-3};
 }
 
 export function bladeMass(mode,g){

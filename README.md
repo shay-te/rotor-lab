@@ -48,7 +48,7 @@ Findings that held across every search:
 
 - **Propeller**: blade-element momentum theory with Prandtl tip loss, a low-Reynolds airfoil model with stall, per-blade forces (so unequal blades create a rotating imbalance), blade tilt, and an extra drag term for sudden width changes.
 - **Cyclorotor**: a quasi-steady model with cyclic pitch and induced inflow along the thrust direction.
-- **Limits**: blades are rigid; there is no ground effect, no forward flight, no blade flex and no rotor-to-rotor interaction. High camber is probably overrated by the model.
+- **Limits**: blades are rigid; there is no ground effect, no forward flight, no blade flex and no rotor-to-rotor interaction. High camber is probably overrated by the model. For about half of all cyclorotor settings the airflow calculation does not settle, so the numbers shown for those are not reliable (see [Recompute the optimum](#recompute-the-optimum)).
 
 Use it to rank shapes, then confirm the winners on a real rig.
 
@@ -97,11 +97,19 @@ npm run optimize
 
 For each power budget it runs a multi-start CMA-ES search for every propeller blade count (1–5) and every cyclorotor blade count (2–6). Per-blade pitch and tilt stay at 0; every other setting is free, all 8 outline points included. CMA-ES learns which settings pay off when moved together, such as neighbouring outline points, or pitch with twist, and searches along those directions. A search that moves one setting at a time misses those gains. It then polishes the best propeller with every setting free, per-blade pitch and tilt included.
 
+The cyclorotor model finds its airflow by repeating a calculation 24 times. For about half of all settings the result never settles: thrust swings between about −4 and +4 N, and the model keeps whichever value the 24th repeat lands on. A long search finds these glitches, because some of them outscore every real design. The optimizer scores a design 0 when:
+
+- **its airflow did not settle**: `evalCyclo` reports `settled: false` when the force still moved by more than 0.1% in the last 4 repeats, or
+- **it draws less than its power budget** without reaching top speed. That means the speed search landed where power does not rise steadily with speed.
+
+Every design is judged as stored, rounded to 4 decimals.
+
 A budget keeps its stored design unless the new one beats it by more than 0.01%, so the table only improves and does not flip between equally good designs (3, 4 and 5 blades often tie). The tool prints a summary table comparing the new designs with the stored ones, then rewrites `js/optimal.js`. A full run (about 340,000 simulated tests) takes 10 to 15 minutes on a 10-core laptop, spread across all cores.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--budgets 15,30,45` | 15,30,45 | Power budgets in watts. The page reads b15, b30 and b45; budgets you leave out keep their stored entries. |
+| `--rotors prop,cyclo` | prop,cyclo | Rotor types to search: propeller (`prop`), cyclorotor (`cyclo`). Types you leave out keep their stored entries. |
 | `--starts 2` | 2 | CMA-ES runs per rotor type, blade count and budget. Each one starts from a new random point, with twice the previous run's population. |
 | `--seed 1` | 1 | Random seed. The same seed gives the same result. |
 | `--workers N` | all cores | Worker threads. |
@@ -111,6 +119,12 @@ Example of a quick trial run that leaves the stored table alone:
 
 ```sh
 npm run optimize -- --budgets 30 --starts 1 --out /tmp/optimal.js
+```
+
+The cyclorotor has only 6 settings, so it can be searched much harder on its own (about 10 minutes):
+
+```sh
+npm run optimize -- --rotors cyclo --starts 8
 ```
 
 ## Deployment

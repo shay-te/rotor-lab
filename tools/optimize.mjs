@@ -7,10 +7,15 @@
 // Pass 2  For each budget, polish the best propeller with every setting free (blade count fixed),
 //         including per-blade pitch and tilt: local CMA-ES runs from the pass-1 winner.
 //
-// A budget keeps its stored design unless this run beats it by more than MIN_GAIN, so the table
-// only ever improves and does not flip between equally good designs from run to run.
+// Only trusted answers count; anything else scores 0 (see trusted()). The cyclorotor model's airflow
+// calculation does not settle for some settings, and a long search finds those glitches because
+// some of them happen to score higher than any real design.
+// Designs are judged as stored (rounded to 4 decimals). A budget keeps its stored design unless this
+// run beats it by more than MIN_GAIN, so the table only ever improves and does not flip between
+// equally good designs from run to run.
 //
-// Usage:  npm run optimize -- [--budgets 15,30,45] [--starts 2] [--seed 1] [--workers N] [--out js/optimal.js]
+// Usage:  npm run optimize -- [--budgets 15,30,45] [--rotors prop,cyclo] [--starts 2] [--seed 1] [--workers N]
+//                             [--out js/optimal.js]
 
 import {Worker, isMainThread, parentPort} from 'node:worker_threads';
 import {availableParallelism} from 'node:os';
@@ -25,8 +30,10 @@ const POLISH_SIGMA = 0.03;    // first step of a polish run
 const BOUND_PENALTY = 100;    // pulls the search back inside the ranges (many optimum settings sit on a limit)
 const MAX_RUN_TESTS = 20000;  // safety cap on one CMA-ES run; runs normally stop well before it
 const MIN_GAIN = 1e-4;        // a new design replaces the stored one only if it scores over 0.01% higher (3-5 blades often tie)
+const FULL_POWER = 0.999;     // a design not at top speed must draw this share of its budget to count
 const PROP_N = [1, 2, 3, 4, 5];
 const CYCLO_N = [2, 3, 4, 5, 6];
+const BLADE_COUNTS = {prop: PROP_N, cyclo: CYCLO_N};
 
 /* ---------- search ---------- */
 
@@ -52,14 +59,22 @@ function gauss(rand) {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
+// Score of design g, or 0 when the model's answer is not a real one: the cyclorotor's airflow
+// calculation did not settle, or the design draws less than its budget without reaching top speed
+// (the rpm search then landed where power does not rise steadily with speed).
+function trusted(mode, g, budget) {
+  const r = solve(mode, g, budget);
+  if (!Number.isFinite(r.score)) return -Infinity;
+  return r.settled !== false && (r.limited || r.Pe >= budget * FULL_POWER) ? r.score : 0;
+}
+
 // Objective in the page's normalized [0,1] space, over the free settings only; counts every simulated test.
 function objective(mode, budget, base, dims) {
   const f = x => {
     f.evals++;
     const u = base.slice();
     dims.forEach((i, k) => { u[i] = x[k]; });
-    const s = solve(mode, decode(mode, u), budget).score;
-    return Number.isFinite(s) ? s : -Infinity;
+    return trusted(mode, decode(mode, u), budget);
   };
   f.evals = 0;
   f.full = x => { const u = base.slice(); dims.forEach((i, k) => { u[i] = x[k]; }); return u; };
@@ -163,6 +178,13 @@ function report(mode, g, budget) {
   return {score: r.score, gpw: r.gpw, grams: r.grams, rpm: r.rpm, lifts: r.lifts};
 }
 
+// The best of several CMA-ES results, judged as they would be stored (rounded).
+function keepBest(mode, budget, f, prev, x) {
+  const g = design(mode, f.full(x)), score = trusted(mode, g, budget);
+  f.evals++;
+  return !prev || score > prev.trusted ? {g, trusted: score} : prev;
+}
+
 // Pass 1: one rotor type, one blade count, one budget. Per-blade pitch and tilt fixed at 0.
 // Each start doubles the population (IPOP restarts): a bigger population searches more widely.
 function runSearch({mode, n, budget, starts, seed}) {
@@ -177,11 +199,9 @@ function runSearch({mode, n, budget, starts, seed}) {
       const x = dims.map(() => rand()), fx = f(x);
       if (fx > f0) { f0 = fx; m0 = x; }
     }
-    const r = cmaes(f, m0, SEARCH_SIGMA, lambda, rand);
-    if (!best || r.score > best.score) best = r;
+    best = keepBest(mode, budget, f, best, cmaes(f, m0, SEARCH_SIGMA, lambda, rand).x);
   }
-  const g = design(mode, f.full(best.x));
-  return {mode, n, budget, g, ...report(mode, g, budget), evals: f.evals};
+  return {mode, n, budget, g: best.g, trusted: best.trusted, ...report(mode, best.g, budget), evals: f.evals};
 }
 
 // Pass 2: every setting free except the blade count, including pitch and tilt of each blade in use.
@@ -190,14 +210,12 @@ function runPolish({budget, g: g0, starts, seed}) {
   const base = encode(mode, {...BASELINE[mode], ...g0});
   const dims = defs.map((d, i) => i).filter(i => defs[i].k !== 'n' && !(defs[i].blade > g0.n));
   const f = objective(mode, budget, base, dims);
-  const x0 = dims.map(i => base[i]);
-  let best = {x: x0, score: f(x0)}, lambda = popSize(dims.length);
+  const free = g => { const u = encode(mode, g); return dims.map(i => u[i]); };
+  let best = keepBest(mode, budget, f, null, dims.map(i => base[i])), lambda = popSize(dims.length);
   for (let s = 0; s < starts; s++, lambda *= 2) {
-    const r = cmaes(f, best.x, POLISH_SIGMA, lambda, rand);
-    if (r.score > best.score) best = r;
+    best = keepBest(mode, budget, f, best, cmaes(f, free(best.g), POLISH_SIGMA, lambda, rand).x);
   }
-  const g = design(mode, f.full(best.x));
-  return {mode, n: g.n, budget, g, ...report(mode, g, budget), evals: f.evals};
+  return {mode, n: best.g.n, budget, g: best.g, trusted: best.trusted, ...report(mode, best.g, budget), evals: f.evals};
 }
 
 /* ---------- worker pool ---------- */
@@ -258,12 +276,13 @@ function readOpt(file) {
 /* ---------- CLI ---------- */
 
 function parseArgs(argv) {
-  const o = {budgets: [15, 30, 45], starts: 2, seed: 1, workers: availableParallelism(),
+  const o = {budgets: [15, 30, 45], rotors: ['prop', 'cyclo'], starts: 2, seed: 1, workers: availableParallelism(),
     out: fileURLToPath(new URL('../js/optimal.js', import.meta.url))};
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i].split('=');
     const val = () => inline ?? argv[++i];
     if (flag === '--budgets') o.budgets = val().split(',').map(Number);
+    else if (flag === '--rotors') o.rotors = val().split(',');
     else if (flag === '--starts') o.starts = +val();
     else if (flag === '--seed') o.seed = +val();
     else if (flag === '--workers') o.workers = +val();
@@ -272,6 +291,7 @@ function parseArgs(argv) {
     else throw new Error(`unknown option ${argv[i]} (try --help)`);
   }
   if (!o.budgets.length || o.budgets.some(b => !(b > 0))) throw new Error('--budgets needs positive watts, e.g. 15,30,45');
+  if (!o.rotors.length || o.rotors.some(r => !BLADE_COUNTS[r])) throw new Error('--rotors needs prop, cyclo or prop,cyclo');
   for (const k of ['starts', 'workers']) if (!(Number.isInteger(o[k]) && o[k] >= 1)) throw new Error(`--${k} needs a whole number >= 1`);
   if (!Number.isFinite(o.seed)) throw new Error('--seed needs a number');
   return o;
@@ -280,55 +300,62 @@ function parseArgs(argv) {
 const HELP = `Recompute the stored optimum designs (js/optimal.js).
 
   --budgets 15,30,45   power budgets in watts (the page reads b15, b30 and b45)
+  --rotors prop,cyclo  rotor types to search: propeller (prop), cyclorotor (cyclo)
   --starts 2           CMA-ES runs per rotor type, blade count and budget; each one
                        starts somewhere new with twice the previous population
   --seed 1             random seed; the same seed gives the same result
   --workers N          worker threads (default: all cores)
   --out FILE           where to write the table (default: js/optimal.js)
 
-Budgets you do not list keep their current entries in the output file, and a
-listed budget keeps its stored design unless this run beats it by more than 0.01%.`;
+Budgets and rotor types you do not list keep their current entries in the output
+file, and a listed one keeps its stored design unless this run beats it by more
+than 0.01%.`;
 
 const pad = (s, w) => String(s).padStart(w);
-const cell = r => (r ? r.score.toFixed(2) + (r.lifts ? ' ' : '*') : '–');
+const cell = r => (r ? r.trusted.toFixed(2) + (r.lifts ? ' ' : '*') : '–');
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) return console.log(HELP);
-  const {budgets, starts, seed, workers, out} = opts;
-  const t0 = performance.now();
-  console.log(`Budgets ${budgets.join(', ')} W · ${starts} starts · seed ${seed} · ${workers} workers`);
+  const {budgets, rotors, starts, seed, workers, out} = opts;
+  const t0 = performance.now(), hasProp = rotors.includes('prop');
+  console.log(`Budgets ${budgets.join(', ')} W · ${rotors.join(', ')} · ${starts} starts · seed ${seed} · ${workers} workers`);
 
   // slowest jobs first (more blades = more work per test) so the pool finishes evenly
   const jobs = [];
   for (const budget of budgets) {
-    for (const n of [...PROP_N].reverse()) jobs.push({kind: 'search', mode: 'prop', n, budget, starts, seed});
-    for (const n of [...CYCLO_N].reverse()) jobs.push({kind: 'search', mode: 'cyclo', n, budget, starts, seed});
+    for (const mode of rotors) {
+      for (const n of [...BLADE_COUNTS[mode]].reverse()) jobs.push({kind: 'search', mode, n, budget, starts, seed});
+    }
   }
   const progress = (r, i, total) => console.log(
     `  [${pad(i, String(total).length)}/${total}] ${r.kind} ${r.mode.padEnd(5)} n=${r.n} @ ${pad(r.budget, 2)} W` +
-    `  ${pad(r.score.toFixed(3), 7)} g/W  ${pad(r.evals, 6)} tests  ${(r.ms / 1000).toFixed(1)} s`);
+    `  ${pad(r.trusted.toFixed(3), 7)} g/W  ${pad(r.evals, 6)} tests  ${(r.ms / 1000).toFixed(1)} s`);
 
   console.log('Pass 1: multi-start CMA-ES, blade pitch and tilt fixed at 0');
   const searches = await runPool(jobs, workers, progress);
-  const pick = (mode, budget) => searches.filter(r => r.mode === mode && r.budget === budget).reduce((a, b) => (b.score > a.score ? b : a));
+  const pick = (mode, budget) => searches.filter(r => r.mode === mode && r.budget === budget).reduce((a, b) => (b.trusted > a.trusted ? b : a));
 
-  console.log('Pass 2: polish the best propeller with every setting free');
-  const polished = await runPool(budgets.map(budget => ({kind: 'polish', budget, g: pick('prop', budget).g, starts, seed})), workers, progress);
+  let polished = [];
+  if (hasProp) {
+    console.log('Pass 2: polish the best propeller with every setting free');
+    polished = await runPool(budgets.map(budget => ({kind: 'polish', budget, g: pick('prop', budget).g, starts, seed})), workers, progress);
+  }
 
   // merge into the existing table so unlisted budgets keep their entries
   const stored = readOpt(out);
   const opt = {prop: {...stored.prop}, cyclo: {...stored.cyclo}};
   const storedReport = (mode, b) => {
     const g = stored[mode]?.['b' + b];
-    return g ? {n: g.n, ...report(mode, {...BASELINE[mode], ...g}, b)} : null;
+    const full = g && {...BASELINE[mode], ...g};
+    return g ? {n: g.n, trusted: trusted(mode, full, b), ...report(mode, full, b)} : null;
   };
   const rows = [];
   budgets.forEach((b, i) => {
-    const p1 = pick('prop', b), pol = polished[i], cy = pick('cyclo', b);
-    const prop = pol.score >= p1.score ? pol : p1; // polishing starts from p1, so it can only match or improve
-    for (const [mode, best, found] of [['prop', p1, prop], ['cyclo', cy, cy]]) {
-      const old = storedReport(mode, b), kept = old != null && found.score <= old.score * (1 + MIN_GAIN);
+    for (const mode of rotors) {
+      const best = pick(mode, b), pol = mode === 'prop' ? polished[i] : null;
+      const found = pol && pol.trusted >= best.trusted ? pol : best; // polishing starts from pass 1, so it can only match or improve
+      const old = storedReport(mode, b), kept = old != null && found.trusted <= old.trusted * (1 + MIN_GAIN);
       if (!kept) opt[mode]['b' + b] = found.g;
       rows.push({b, mode, best, found, stored: old, kept, written: kept ? old : found});
     }
@@ -337,17 +364,17 @@ async function main() {
 
   const evals = [...searches, ...polished].reduce((a, r) => a + r.evals, 0);
   const ns = [1, 2, 3, 4, 5, 6];
-  console.log('\nLift per watt (g/W) of the best design found; * = cannot lift the mast head, score penalised\n');
+  console.log('\nLift per watt (g/W) of the best design found; * = cannot lift the mast head, score penalised;\n0 = no trusted answer (see trusted())\n');
   console.log(`Budget  Rotor  ${ns.map(n => pad('n=' + n, 7)).join(' ')}    Pass 1   Final        Stored   Change`);
   for (const r of rows) {
     const per = ns.map(n => pad(cell(searches.find(c => c.mode === r.mode && c.budget === r.b && c.n === n)), 7)).join(' ');
-    const change = r.stored == null ? '      new' : pad(((r.found.score / r.stored.score - 1) * 100).toFixed(2) + '%', 9);
-    console.log(`${pad(r.b + ' W', 6)}  ${r.mode.padEnd(5)}  ${per}  ${pad(r.best.score.toFixed(3), 8)}  ${pad(r.found.score.toFixed(3), 6)} n=${r.found.n}` +
-      `  ${pad(r.stored == null ? '–' : r.stored.score.toFixed(3), 7)}  ${change}${r.kept ? '  kept stored' : ''}`);
+    const change = r.stored == null ? '      new' : pad(((r.found.trusted / r.stored.trusted - 1) * 100).toFixed(2) + '%', 9);
+    console.log(`${pad(r.b + ' W', 6)}  ${r.mode.padEnd(5)}  ${per}  ${pad(r.best.trusted.toFixed(3), 8)}  ${pad(r.found.trusted.toFixed(3), 6)} n=${r.found.n}` +
+      `  ${pad(r.stored == null ? '–' : r.stored.trusted.toFixed(3), 7)}  ${change}${r.kept ? '  kept stored' : ''}`);
   }
-  for (const b of budgets) {
-    const r = rows.find(x => x.b === b && x.mode === 'prop').written;
-    console.log(`\n${b} W propeller: ${r.n} blades, ${r.gpw.toFixed(2)} g/W, ${r.grams.toFixed(0)} g net lift at ${r.rpm.toFixed(0)} rpm`);
+  for (const r of rows) {
+    const w = r.written, rotor = r.mode === 'prop' ? 'propeller' : 'cyclorotor';
+    console.log(`\n${r.b} W ${rotor}: ${w.n} blades, ${w.gpw.toFixed(2)} g/W, ${w.grams.toFixed(0)} g net lift at ${w.rpm.toFixed(0)} rpm`);
   }
   const kept = rows.filter(r => r.kept);
   if (kept.length) console.log(`\nNote: kept ${kept.length} stored design(s) that this run did not beat by more than ${MIN_GAIN * 100}%.`);
