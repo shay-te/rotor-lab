@@ -89,7 +89,8 @@ $('#btn-level').onclick=()=>{if(S.run==='running'){S.run='paused';S.test=null;}S
 document.querySelectorAll('.presets button').forEach(b=>b.onclick=()=>{if(S.run==='running'){S.run='paused';S.test=null;}S.target={...S.target,...PRESETS[b.dataset.p]};S.src='manual';evaluateShown();syncSliders();updateButtons();});
 $('#btn-optimal').onclick=()=>$('#btn-load-opt').onclick();
 $('#btn-load-opt').onclick=()=>{if(S.run==='running')S.run='paused';S.test=null;const bk=S.budget<23?'b15':S.budget<38?'b30':'b45';S.target={...BASELINE[S.mode],...OPT[S.mode][bk]};S.src='computed optimum';evaluateShown();syncSliders();updateButtons();
-  $('#plan-line').textContent=`Computed optimum for ${S.mode==='prop'?'the propeller':'the cyclorotor'} at 30 W, from an exhaustive search at ${bk.slice(1)} W.`;};
+  const at=+bk.slice(1);
+  $('#plan-line').textContent=`Best ${S.mode==='prop'?'propeller':'cyclorotor'} found at ${at} W by an offline CMA-ES search over every setting and blade count`+(S.budget===at?'.':`, the stored budget nearest ${S.budget} W.`);};
 const stage=$('#stage');
 function resize(){const w=stage.clientWidth,h=stage.clientHeight;if(!w||!h)return;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();drawChart();drawOutline();}
 new ResizeObserver(resize).observe(stage);
