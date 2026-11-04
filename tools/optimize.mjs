@@ -8,8 +8,8 @@
 //         including per-blade pitch and tilt: local CMA-ES runs from the pass-1 winner.
 //
 // Only trusted answers count; anything else scores 0 (see trusted()). The cyclorotor model's airflow
-// calculation does not settle for some settings, and a long search finds those glitches because
-// some of them happen to score higher than any real design.
+// calculation finds no steady answer for about 1 setting in 100, and its numbers there are whatever
+// the last repeat gave. A long search would seek out any of those that happen to score high.
 // Designs are judged as stored (rounded to 4 decimals). A budget keeps its stored design unless this
 // run beats it by more than MIN_GAIN, so the table only ever improves and does not flip between
 // equally good designs from run to run.

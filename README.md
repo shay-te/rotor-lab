@@ -48,7 +48,7 @@ Findings that held across every search:
 
 - **Propeller**: blade-element momentum theory with Prandtl tip loss, a low-Reynolds airfoil model with stall, per-blade forces (so unequal blades create a rotating imbalance), blade tilt, and an extra drag term for sudden width changes.
 - **Cyclorotor**: a quasi-steady model with cyclic pitch and induced inflow along the thrust direction.
-- **Limits**: blades are rigid; there is no ground effect, no forward flight, no blade flex and no rotor-to-rotor interaction. High camber is probably overrated by the model. For about half of all cyclorotor settings the airflow calculation does not settle, so the numbers shown for those are not reliable (see [Recompute the optimum](#recompute-the-optimum)).
+- **Limits**: blades are rigid; there is no ground effect, no forward flight, no blade flex and no rotor-to-rotor interaction. High camber is probably overrated by the model. For about 1 cyclorotor setting in 100 the airflow calculation finds no steady answer, so the numbers shown for those are not reliable (see [Recompute the optimum](#recompute-the-optimum)).
 
 Use it to rank shapes, then confirm the winners on a real rig.
 
@@ -97,9 +97,9 @@ npm run optimize
 
 For each power budget it runs a multi-start CMA-ES search for every propeller blade count (1–5) and every cyclorotor blade count (2–6). Per-blade pitch and tilt stay at 0; every other setting is free, all 8 outline points included. CMA-ES learns which settings pay off when moved together, such as neighbouring outline points, or pitch with twist, and searches along those directions. A search that moves one setting at a time misses those gains. It then polishes the best propeller with every setting free, per-blade pitch and tilt included.
 
-The cyclorotor model finds its airflow by repeating a calculation 24 times. For about half of all settings the result never settles: thrust swings between about −4 and +4 N, and the model keeps whichever value the 24th repeat lands on. A long search finds these glitches, because some of them outscore every real design. The optimizer scores a design 0 when:
+The cyclorotor model finds its airflow by repeating a calculation until the airflow agrees with the force it produces, moving 12% of the way each time. Bigger steps overshoot: with half steps, about half of all settings never settle and the thrust keeps swinging, between about −4 and +4 N in some cases. With 12% steps about 99 settings in 100 settle, usually within about 60 repeats. For the rest the force direction keeps turning, and the model stops after 400 repeats. The optimizer scores a design 0 when:
 
-- **its airflow did not settle**: `evalCyclo` reports `settled: false` when the force still moved by more than 0.1% in the last 4 repeats, or
+- **its airflow did not settle**: `evalCyclo` reports `settled: false` when the force still moved by more than 0.001% on its last repeat, or
 - **it draws less than its power budget** without reaching top speed. That means the speed search landed where power does not rise steadily with speed.
 
 Every design is judged as stored, rounded to 4 decimals.
@@ -121,7 +121,7 @@ Example of a quick trial run that leaves the stored table alone:
 npm run optimize -- --budgets 30 --starts 1 --out /tmp/optimal.js
 ```
 
-The cyclorotor has only 6 settings, so it can be searched much harder on its own (about 10 minutes):
+The cyclorotor has only 6 settings, so it can be searched much harder on its own (about 20 minutes):
 
 ```sh
 npm run optimize -- --rotors cyclo --starts 8
